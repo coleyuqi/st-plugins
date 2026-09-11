@@ -7,11 +7,11 @@
  *   预设里放 {{getvar::chat_summary}} 读取；/summary /summaryclear
  *
  * 安装：扩展面板 → 安装扩展 → 输入本仓库的 Git 地址（git clone 后按 manifest.json 加载）
+ * 注意：面板安装后入口位于 third-party/<仓库名>/index.js，导入路径按此层级写（4 层上跳到 public）
  */
-import { getContext, saveSettingsDebounced, generateQuietPrompt, getCurrentChatId, setExtensionPrompt, extension_prompt_types, chat_metadata } from '../../../script.js';
-import { eventSource, event_types } from '../../events.js';
-import { registerSlashCommand } from '../../slash-commands.js';
-import { extension_settings, saveMetadataDebounced } from '../../extensions.js';
+import { getContext, saveSettingsDebounced, generateQuietPrompt, getCurrentChatId, setExtensionPrompt, extension_prompt_types, chat_metadata, eventSource, event_types } from '../../../../script.js';
+import { registerSlashCommand } from '../../../slash-commands.js';
+import { extension_settings, saveMetadataDebounced } from '../../../extensions.js';
 
 { // ==================== 功能1：NPC 登记 ====================
 const EXT_NAME = 'npc_register';
