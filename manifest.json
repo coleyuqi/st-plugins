@@ -1,0 +1,10 @@
+{
+    "display_name": "st-plugins",
+    "loading_order": 1,
+    "requires": [],
+    "optional": [],
+    "js": "index.js",
+    "author": "coleyuqi",
+    "version": "1.1.0",
+    "homePage": "https://github.com/coleyuqi/st-plugins"
+}
