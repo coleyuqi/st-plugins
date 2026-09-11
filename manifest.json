@@ -5,7 +5,7 @@
     "optional": [],
     "js": "index.js",
     "author": "coleyuqi",
-    "version": "1.2.0",
+    "version": "1.3.0",
     "homePage": "https://github.com/coleyuqi/st-plugins",
     "auto_update": true,
     "minimum_client_version": "1.18.0"

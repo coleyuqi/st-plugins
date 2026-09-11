@@ -1,5 +1,5 @@
 /**
- * st-plugins v1.1 —— SillyTavern 1.18 双功能扩展（单文件版，配合 manifest.json 供面板安装）
+ * st-plugins v1.3 —— SillyTavern 1.18 双功能扩展（单文件版，配合 manifest.json 供面板安装）
  *
  * 功能1：NPC 登记 —— 随机 NPC 首次出场后台生成人设并锁定
  *   标记 [[新角色:名字]] 或 /npc 命令；纯内存，重启/删对话即清；/npclist /npcforget
@@ -8,10 +8,14 @@
  *
  * 安装：扩展面板 → 安装扩展 → 输入本仓库的 Git 地址（git clone 后按 manifest.json 加载）
  * 注意：面板安装后入口位于 third-party/<仓库名>/index.js，导入路径按此层级写（4 层上跳到 public）
+ * 1.18 命令注册用 SlashCommandParser.addCommandObject（registerSlashCommand 已废弃）
  */
 import { getContext, saveSettingsDebounced, generateQuietPrompt, getCurrentChatId, setExtensionPrompt, extension_prompt_types, chat_metadata, eventSource, event_types } from '../../../../script.js';
-import { registerSlashCommand } from '../../../slash-commands.js';
+import { SlashCommandParser } from '../../../slash-commands.js';
+import { SlashCommand } from '../../../slash-commands/SlashCommand.js';
 import { extension_settings, saveMetadataDebounced } from '../../../extensions.js';
+
+console.log('[st-plugins] 加载成功 v1.3');
 
 { // ==================== 功能1：NPC 登记 ====================
 const EXT_NAME = 'npc_register';
@@ -162,33 +166,45 @@ eventSource.on(event_types.MESSAGE_SENT, () => {
     refreshNpcPrompt();
 });
 
-// ============ 斜杠命令 ============
-registerSlashCommand('npc', (_args, value) => {
-    const v = (value || '').trim();
-    if (!v) return '用法：/npc 名字 或 /npc 名字 一句话印象';
-    const sp = v.indexOf(' ');
-    const name = sp === -1 ? v : v.slice(0, sp);
-    const note = sp === -1 ? '' : v.slice(sp + 1).trim();
-    registerNpc(getCurrentChatId(), name, note, '');
-    return '';
-}, [], { helpString: '登记临时NPC人设：/npc 名字 或 /npc 名字 一句话印象' });
+// ============ 斜杠命令（1.18 新 API） ============
+SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+    name: 'npc',
+    callback: (_args, text) => {
+        const v = (text || '').trim();
+        if (!v) return '用法：/npc 名字 或 /npc 名字 一句话印象';
+        const sp = v.indexOf(' ');
+        const name = sp === -1 ? v : v.slice(0, sp);
+        const note = sp === -1 ? '' : v.slice(sp + 1).trim();
+        registerNpc(getCurrentChatId(), name, note, '');
+        return '';
+    },
+    helpString: '登记临时NPC人设：/npc 名字 或 /npc 名字 一句话印象',
+}));
 
-registerSlashCommand('npclist', () => {
-    const map = npcMap.get(getCurrentChatId());
-    if (!map || map.size === 0) return '当前对话没有已登记的NPC。';
-    return '已登记NPC：\n' + [...map.keys()].join('、');
-}, [], { helpString: '查看当前对话已登记的NPC' });
+SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+    name: 'npclist',
+    callback: () => {
+        const map = npcMap.get(getCurrentChatId());
+        if (!map || map.size === 0) return '当前对话没有已登记的NPC。';
+        return '已登记NPC：\n' + [...map.keys()].join('、');
+    },
+    helpString: '查看当前对话已登记的NPC',
+}));
 
-registerSlashCommand('npcforget', (_args, value) => {
-    const name = (value || '').trim();
-    const map = npcMap.get(getCurrentChatId());
-    if (!name) return '用法：/npcforget 名字';
-    if (map && map.delete(name)) {
-        refreshNpcPrompt();
-        return `已删除「${name}」的登记。`;
-    }
-    return `「${name}」未登记。`;
-}, [], { helpString: '删除NPC登记：/npcforget 名字' });
+SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+    name: 'npcforget',
+    callback: (_args, text) => {
+        const name = (text || '').trim();
+        const map = npcMap.get(getCurrentChatId());
+        if (!name) return '用法：/npcforget 名字';
+        if (map && map.delete(name)) {
+            refreshNpcPrompt();
+            return `已删除「${name}」的登记。`;
+        }
+        return `「${name}」未登记。`;
+    },
+    helpString: '删除NPC登记：/npcforget 名字',
+}));
 
 // ============ 设置面板 ============
 jQuery(() => {
@@ -316,19 +332,27 @@ eventSource.on(event_types.MESSAGE_SENT, () => {
     maybeSummarize();
 });
 
-// ============ 斜杠命令 ============
-registerSlashCommand('summary', () => {
-    runSummary();
-    return '已触发总结…';
-}, [], { helpString: '立即总结当前对话并写入 chat_summary 变量' });
+// ============ 斜杠命令（1.18 新 API） ============
+SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+    name: 'summary',
+    callback: () => {
+        runSummary();
+        return '已触发总结…';
+    },
+    helpString: '立即总结当前对话并写入 chat_summary 变量',
+}));
 
-registerSlashCommand('summaryclear', () => {
-    if (chat_metadata?.variables) {
-        delete chat_metadata.variables[VAR_NAME];
-        saveMetadataDebounced();
-    }
-    return '摘要已清空。';
-}, [], { helpString: '清空 chat_summary 变量' });
+SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+    name: 'summaryclear',
+    callback: () => {
+        if (chat_metadata?.variables) {
+            delete chat_metadata.variables[VAR_NAME];
+            saveMetadataDebounced();
+        }
+        return '摘要已清空。';
+    },
+    helpString: '清空 chat_summary 变量',
+}));
 
 // ============ 设置面板 ============
 jQuery(() => {
