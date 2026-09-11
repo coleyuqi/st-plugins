@@ -1,5 +1,5 @@
 /**
- * st-plugins v1.3 —— SillyTavern 1.18 双功能扩展（单文件版，配合 manifest.json 供面板安装）
+ * st-plugins v1.4 —— SillyTavern 1.18 双功能扩展（单文件版，配合 manifest.json 供面板安装）
  *
  * 功能1：NPC 登记 —— 随机 NPC 首次出场后台生成人设并锁定
  *   标记 [[新角色:名字]] 或 /npc 命令；纯内存，重启/删对话即清；/npclist /npcforget
@@ -15,11 +15,29 @@ import { SlashCommandParser } from '../../../slash-commands.js';
 import { SlashCommand } from '../../../slash-commands/SlashCommand.js';
 import { extension_settings, saveMetadataDebounced } from '../../../extensions.js';
 
-console.log('[st-plugins] 加载成功 v1.3');
+console.log('[st-plugins] 加载成功 v1.4');
+window.spDebug = (msg) => { try { toastr.warning('[st-plugins] ' + msg); } catch(e) {} console.warn('[st-plugins]', msg); };
 
 { // ==================== 功能1：NPC 登记 ====================
 const EXT_NAME = 'npc_register';
 const MARKER_RE = /\[\[新角色[:：]\s*([^\[\]]+)\]\]/g;
+
+function safeRegisterCommand(props) {
+    try {
+        SlashCommandParser.addCommandObject(SlashCommand.fromProps(props));
+        console.log('[st-plugins] 命令已注册:', props.name);
+    } catch (err) {
+        console.error('[st-plugins] addCommandObject 失败，降级直写:', props.name, err);
+        try {
+            const cmd = SlashCommand.fromProps(props);
+            cmd.source = 'st-plugins';
+            SlashCommandParser.commands[props.name] = cmd;
+            console.log('[st-plugins] 命令已直写:', props.name);
+        } catch (err2) {
+            spDebug('命令注册失败 ' + props.name + '：' + (err2?.message || err2));
+        }
+    }
+}
 
 const defaultSettings = {
     enabled: true,
@@ -167,7 +185,7 @@ eventSource.on(event_types.MESSAGE_SENT, () => {
 });
 
 // ============ 斜杠命令（1.18 新 API） ============
-SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+safeRegisterCommand({
     name: 'npc',
     callback: (_args, text) => {
         const v = (text || '').trim();
@@ -179,9 +197,9 @@ SlashCommandParser.addCommandObject(SlashCommand.fromProps({
         return '';
     },
     helpString: '登记临时NPC人设：/npc 名字 或 /npc 名字 一句话印象',
-}));
+});
 
-SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+safeRegisterCommand({
     name: 'npclist',
     callback: () => {
         const map = npcMap.get(getCurrentChatId());
@@ -189,9 +207,9 @@ SlashCommandParser.addCommandObject(SlashCommand.fromProps({
         return '已登记NPC：\n' + [...map.keys()].join('、');
     },
     helpString: '查看当前对话已登记的NPC',
-}));
+});
 
-SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+safeRegisterCommand({
     name: 'npcforget',
     callback: (_args, text) => {
         const name = (text || '').trim();
@@ -204,7 +222,7 @@ SlashCommandParser.addCommandObject(SlashCommand.fromProps({
         return `「${name}」未登记。`;
     },
     helpString: '删除NPC登记：/npcforget 名字',
-}));
+});
 
 // ============ 设置面板 ============
 jQuery(() => {
@@ -333,16 +351,16 @@ eventSource.on(event_types.MESSAGE_SENT, () => {
 });
 
 // ============ 斜杠命令（1.18 新 API） ============
-SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+safeRegisterCommand({
     name: 'summary',
     callback: () => {
         runSummary();
         return '已触发总结…';
     },
     helpString: '立即总结当前对话并写入 chat_summary 变量',
-}));
+});
 
-SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+safeRegisterCommand({
     name: 'summaryclear',
     callback: () => {
         if (chat_metadata?.variables) {
@@ -352,7 +370,7 @@ SlashCommandParser.addCommandObject(SlashCommand.fromProps({
         return '摘要已清空。';
     },
     helpString: '清空 chat_summary 变量',
-}));
+});
 
 // ============ 设置面板 ============
 jQuery(() => {
@@ -403,3 +421,5 @@ jQuery(() => {
     });
 });
 } // 功能2 结束
+
+jQuery(() => { spDebug('初始化完成，共注册命令: ' + ['npc','npclist','npcforget','summary','summaryclear'].filter(n => SlashCommandParser.commands[n]).join(',') || '无'); });
