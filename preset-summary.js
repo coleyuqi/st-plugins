@@ -1,5 +1,5 @@
 /**
- * 预设内摘要 —— 对话自动总结插件
+ * 预设内摘要 v1.1 —— 对话自动总结插件
  *
  * 用途：对话每满 N 条消息，后台增量总结一次，摘要写入对话级变量 chat_summary。
  * 在预设的任意 prompt 块里放一行 {{getvar::chat_summary}} 即可每轮自动带入摘要，
@@ -7,13 +7,14 @@
  *
  * 命令：/summary 立即总结  /summaryclear 清空摘要
  *
- * 要求：SillyTavern 1.12+
+ * 兼容：SillyTavern 1.18（events.js / extensions.js 的 saveMetadataDebounced /
+ *       generateQuietPrompt 对象签名 / chat_metadata.variables 仍为 getvar 数据源）
  * 安装：放入 public/scripts/extensions/third-party/ 目录后刷新页面
- * 预设：在你想放摘要的块里加一行 {{getvar::chat_summary}}（本项目的梁元预设已内置）
  */
-import { eventSource, event_types, getContext, saveSettingsDebounced, generateQuietPrompt, getCurrentChatId, saveMetadataDebounced } from '../../../script.js';
+import { getContext, saveSettingsDebounced, generateQuietPrompt, chat_metadata } from '../../../script.js';
+import { eventSource, event_types } from '../../events.js';
 import { registerSlashCommand } from '../../slash-commands.js';
-import { extension_settings } from '../../extensions.js';
+import { extension_settings, saveMetadataDebounced } from '../../extensions.js';
 
 const EXT_NAME = 'preset_summary';
 const VAR_NAME = 'chat_summary';
@@ -43,7 +44,7 @@ async function runSummary() {
     busy = true;
     toastr.info('正在更新聊天摘要…');
     try {
-        const old = ctx.chatMetadata?.variables?.[VAR_NAME] || '';
+        const old = chat_metadata?.variables?.[VAR_NAME] || '';
         const recent = chat.slice(-s.lookback).map((m) => {
             const who = m.is_user ? '{{user}}' : (m.name || '角色');
             return `${who}：${(m.mes || '').slice(0, 600)}`;
@@ -62,10 +63,10 @@ async function runSummary() {
             `2. 全文不超过 ${s.maxLen} 字，用平实中文`,
             '3. 直接输出摘要正文，不要任何前缀或解释',
         ].join('\n');
-        const out = (await generateQuietPrompt(prompt, false, true) || '').trim();
+        const out = (await generateQuietPrompt({ quietPrompt: prompt, skipWIAN: true }) || '').trim();
         if (!out) throw new Error('生成结果为空');
-        if (!ctx.chatMetadata.variables) ctx.chatMetadata.variables = {};
-        ctx.chatMetadata.variables[VAR_NAME] = out;
+        if (!chat_metadata.variables) chat_metadata.variables = {};
+        chat_metadata.variables[VAR_NAME] = out;
         saveMetadataDebounced();
         console.log(`[预设内摘要] 已更新（${out.length} 字）`);
         toastr.success(`聊天摘要已更新（${out.length} 字）`);
@@ -106,9 +107,8 @@ registerSlashCommand('summary', () => {
 }, [], { helpString: '立即总结当前对话并写入 chat_summary 变量' });
 
 registerSlashCommand('summaryclear', () => {
-    const ctx = getContext();
-    if (ctx.chatMetadata?.variables) {
-        delete ctx.chatMetadata.variables[VAR_NAME];
+    if (chat_metadata?.variables) {
+        delete chat_metadata.variables[VAR_NAME];
         saveMetadataDebounced();
     }
     return '摘要已清空。';

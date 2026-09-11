@@ -1,26 +1,20 @@
 /**
- * NPC登记 v1.1 —— 随机出场角色人设锁定插件（通用）
+ * st-plugins 合集 —— 两个 SillyTavern 通用插件合并版
  *
- * 用途：角色卡对话中即兴登场的随机 NPC（路人/店主/卫兵等），在首次出场时
- * 后台生成并锁定其人设，后续出场保持一致，防止人设漂移。
+ * 1. NPC 登记：随机 NPC 首次出场后台生成人设并锁定
+ *    标记 [[新角色:名字]] 或 /npc 命令；纯内存，重启/删对话即清
+ * 2. 预设内摘要：每 N 条消息增量总结写入变量 chat_summary
+ *    预设里放 {{getvar::chat_summary}} 读取；/summary /summaryclear
  *
- * 触发方式（两种并存）：
- * 1. 标记模式：角色消息中出现 [[新角色:名字]]（需卡的世界书配合输出标记）
- * 2. 命令模式：/npc 名字 或 /npc 名字 一句话印象
- *
- * 其他命令：/npclist 查看已登记  /npcforget 名字 删除登记
- *
- * 存储：纯内存。重启 ST 或删除对话后自动清空，符合"临时人设"定位。
- * 注入：每轮生成前，仅注入最近 N 条消息中出现过的已登记 NPC 人设，防止撑爆上下文。
- *
- * 兼容：SillyTavern 1.18（events.js / setExtensionPrompt / generateQuietPrompt 对象签名）
- * 安装：放入 public/scripts/extensions/third-party/ 目录后刷新页面
+ * 要求：SillyTavern 1.12+（开发于 1.18.0）
+ * 安装：扩展面板 → 安装扩展 → 输入仓库地址 https://github.com/coleyuqi/st-plugins
  */
-import { getContext, saveSettingsDebounced, generateQuietPrompt, getCurrentChatId, setExtensionPrompt, extension_prompt_types } from '../../../script.js';
-import { eventSource, event_types } from '../../events.js';
+import { eventSource, event_types, getContext, saveSettingsDebounced, generateQuietPrompt, getCurrentChatId, saveMetadataDebounced } from '../../../script.js';
 import { registerSlashCommand } from '../../slash-commands.js';
+import { registerPromptManager } from '../../prompt-manager.js';
 import { extension_settings } from '../../extensions.js';
 
+// ==================== 插件1：NPC 登记 ====================
 const EXT_NAME = 'npc_register';
 const MARKER_RE = /\[\[新角色[:：]\s*([^\[\]]+)\]\]/g;
 
@@ -85,12 +79,11 @@ async function registerNpc(chatId, name, note, contextText) {
             .replaceAll('{{name}}', name)
             .replaceAll('{{note}}', note || '（无）')
             .replaceAll('{{context}}', (contextText || '').slice(0, 800) || '（无）');
-        const persona = (await generateQuietPrompt({ quietPrompt: prompt, skipWIAN: true }) || '').trim();
+        const persona = (await generateQuietPrompt(prompt, false, true) || '').trim();
         if (!persona) throw new Error('生成结果为空');
         map.set(name, persona);
         console.log(`[NPC登记] 已锁定「${name}」`, persona);
         toastr.success(`NPC「${name}」人设已锁定`);
-        refreshNpcPrompt();
     } catch (err) {
         console.error('[NPC登记] 生成失败', err);
         toastr.error(`「${name}」人设生成失败：${err?.message || err}`);
@@ -121,12 +114,6 @@ function buildPrompt() {
     return '[已登记NPC人设]\n' + active.map(([n, p]) => `◆ ${n}\n${p}`).join('\n');
 }
 
-// 注入值在每次消息/登记变化后立即刷新（ST 在生成早期收集 IN_PROMPT，
-// 比 GENERATE_AFTER_DATA 早，故不能挂生成事件，必须消息级刷新）
-function refreshNpcPrompt() {
-    setExtensionPrompt('npc_register', buildPrompt(), extension_prompt_types.IN_PROMPT, 0);
-}
-
 // ============ 事件 ============
 eventSource.on(event_types.CHAT_CHANGED, () => {
     // 只保留当前对话的人设，删除对话时自动清理；重启天然清空（纯内存）
@@ -148,25 +135,24 @@ eventSource.on(event_types.CHAT_CHANGED, () => {
             }
         }
     }
-    refreshNpcPrompt();
 });
 
-eventSource.on(event_types.MESSAGE_RECEIVED, () => {
-    // 1.18 起该事件参数变为 (messageId, type)，直接取聊天最后一条最稳
-    const chat = getContext().chat;
-    const last = Array.isArray(chat) ? chat[chat.length - 1] : null;
-    if (!last) return;
-    const chatId = getCurrentChatId();
-    recordMessage(chatId, !!last.is_user, last.mes || '');
-    if (last.is_user) return; // 只解析角色消息里的标记
-    for (const name of parseMarkers(last.mes || '')) {
-        registerNpc(chatId, name, '', last.mes || '');
+eventSource.on(event_types.MESSAGE_RECEIVED, (data) => {
+    const chatId = data?.chat_id || getCurrentChatId();
+    const text = data?.mes || '';
+    recordMessage(chatId, !!data?.is_user, text);
+    if (data?.is_user) return; // 只解析角色消息里的标记
+    for (const name of parseMarkers(text)) {
+        registerNpc(chatId, name, '', text);
     }
-    refreshNpcPrompt();
 });
 
-eventSource.on(event_types.MESSAGE_SENT, () => {
-    refreshNpcPrompt();
+// ============ 注入 ============
+registerPromptManager({
+    selector: () => null,
+    position: 'extension_prompt',
+    identifier: EXT_NAME,
+    onPrompt: () => buildPrompt(),
 });
 
 // ============ 斜杠命令 ============
@@ -190,10 +176,7 @@ registerSlashCommand('npcforget', (_args, value) => {
     const name = (value || '').trim();
     const map = npcMap.get(getCurrentChatId());
     if (!name) return '用法：/npcforget 名字';
-    if (map && map.delete(name)) {
-        refreshNpcPrompt();
-        return `已删除「${name}」的登记。`;
-    }
+    if (map && map.delete(name)) return `已删除「${name}」的登记。`;
     return `「${name}」未登记。`;
 }, [], { helpString: '删除NPC登记：/npcforget 名字' });
 
@@ -233,6 +216,155 @@ jQuery(() => {
     });
     $('#npc_register_window').on('input', function () {
         s.recentWindow = Math.max(1, Math.min(50, Number(this.value) || 8));
+        saveSettingsDebounced();
+    });
+});
+
+// ==================== 插件2：预设内摘要 ====================
+const EXT_NAME = 'preset_summary';
+const VAR_NAME = 'chat_summary';
+
+const defaultSettings = {
+    enabled: true,
+    interval: 20,  // 每满 N 条消息总结一次
+    lookback: 30,  // 每次回顾最近 M 条
+    maxLen: 400,   // 摘要上限字数
+};
+
+let busy = false;
+
+function getSettings() {
+    if (!extension_settings[EXT_NAME]) {
+        extension_settings[EXT_NAME] = structuredClone(defaultSettings);
+    }
+    return extension_settings[EXT_NAME];
+}
+
+async function runSummary() {
+    const s = getSettings();
+    const ctx = getContext();
+    const chat = ctx.chat;
+    if (!Array.isArray(chat) || chat.length < 2) return;
+    if (busy) return;
+    busy = true;
+    toastr.info('正在更新聊天摘要…');
+    try {
+        const old = ctx.chatMetadata?.variables?.[VAR_NAME] || '';
+        const recent = chat.slice(-s.lookback).map((m) => {
+            const who = m.is_user ? '{{user}}' : (m.name || '角色');
+            return `${who}：${(m.mes || '').slice(0, 600)}`;
+        }).join('\n');
+        const prompt = [
+            '你是剧情记录员。下面有一段对话的已有摘要和最近的新对话，请把新内容并入摘要，输出更新后的完整摘要。',
+            '',
+            '[已有摘要]',
+            old || '（尚无摘要）',
+            '',
+            '[最近对话]',
+            recent,
+            '',
+            '要求：',
+            '1. 只记录剧情事实：进展、任务、地点、NPC与关系、关键事件与决定，不写分析评论',
+            `2. 全文不超过 ${s.maxLen} 字，用平实中文`,
+            '3. 直接输出摘要正文，不要任何前缀或解释',
+        ].join('\n');
+        const out = (await generateQuietPrompt(prompt, false, true) || '').trim();
+        if (!out) throw new Error('生成结果为空');
+        if (!ctx.chatMetadata.variables) ctx.chatMetadata.variables = {};
+        ctx.chatMetadata.variables[VAR_NAME] = out;
+        saveMetadataDebounced();
+        console.log(`[预设内摘要] 已更新（${out.length} 字）`);
+        toastr.success(`聊天摘要已更新（${out.length} 字）`);
+    } catch (err) {
+        console.error('[预设内摘要] 失败', err);
+        toastr.error('聊天摘要更新失败：' + (err?.message || err));
+    } finally {
+        busy = false;
+    }
+}
+
+function maybeSummarize() {
+    const s = getSettings();
+    if (!s.enabled || busy) return;
+    const chat = getContext().chat;
+    if (!Array.isArray(chat) || chat.length < 4) return;
+    if (chat.length % s.interval !== 0) return;
+    runSummary();
+}
+
+// ============ 事件 ============
+eventSource.on(event_types.CHAT_CHANGED, () => {
+    busy = false;
+});
+
+eventSource.on(event_types.MESSAGE_RECEIVED, () => {
+    maybeSummarize();
+});
+
+eventSource.on(event_types.MESSAGE_SENT, () => {
+    maybeSummarize();
+});
+
+// ============ 斜杠命令 ============
+registerSlashCommand('summary', () => {
+    runSummary();
+    return '已触发总结…';
+}, [], { helpString: '立即总结当前对话并写入 chat_summary 变量' });
+
+registerSlashCommand('summaryclear', () => {
+    const ctx = getContext();
+    if (ctx.chatMetadata?.variables) {
+        delete ctx.chatMetadata.variables[VAR_NAME];
+        saveMetadataDebounced();
+    }
+    return '摘要已清空。';
+}, [], { helpString: '清空 chat_summary 变量' });
+
+// ============ 设置面板 ============
+jQuery(() => {
+    const s = getSettings();
+    const html = `
+    <div id="preset_summary_settings">
+      <div class="inline-drawer">
+        <div class="inline-drawer-toggle inline-drawer-header">
+          <b>预设内摘要</b>
+          <div class="inline-drawer-icon fa-solid fa-circle-chevron-down"></div>
+        </div>
+        <div class="inline-drawer-content">
+          <label class="checkbox_label" for="preset_summary_enabled">
+            <input type="checkbox" id="preset_summary_enabled" ${s.enabled ? 'checked' : ''}/>
+            <span>启用（每满 N 条消息自动总结）</span>
+          </label>
+          <div class="title_restorable">
+            每 <input id="preset_summary_interval" class="text_pole width50p" type="number" min="4" max="200" value="${Number(s.interval) || 20}"/> 条消息总结一次
+          </div>
+          <div class="title_restorable">
+            每次回顾最近 <input id="preset_summary_lookback" class="text_pole width50p" type="number" min="5" max="300" value="${Number(s.lookback) || 30}"/> 条消息
+          </div>
+          <div class="title_restorable">
+            摘要上限 <input id="preset_summary_maxlen" class="text_pole width50p" type="number" min="100" max="2000" value="${Number(s.maxLen) || 400}"/> 字
+          </div>
+          <div class="title_restorable">
+            预设中放置：<code>{{getvar::chat_summary}}</code>（当前摘要自动出现在该行）
+          </div>
+        </div>
+      </div>
+    </div>`;
+    $('#extensions_settings').append(html);
+    $('#preset_summary_enabled').on('change', function () {
+        s.enabled = !!this.checked;
+        saveSettingsDebounced();
+    });
+    $('#preset_summary_interval').on('input', function () {
+        s.interval = Math.max(4, Math.min(200, Number(this.value) || 20));
+        saveSettingsDebounced();
+    });
+    $('#preset_summary_lookback').on('input', function () {
+        s.lookback = Math.max(5, Math.min(300, Number(this.value) || 30));
+        saveSettingsDebounced();
+    });
+    $('#preset_summary_maxlen').on('input', function () {
+        s.maxLen = Math.max(100, Math.min(2000, Number(this.value) || 400));
         saveSettingsDebounced();
     });
 });
